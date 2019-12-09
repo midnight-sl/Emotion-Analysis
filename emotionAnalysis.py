@@ -3,7 +3,6 @@ from typing import Tuple, Dict
 from collections import defaultdict
 import pandas as pd
 import re
-from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 
 nlp = spacy.load('en_core_web_md')
@@ -21,8 +20,6 @@ four_classes = pd.read_csv(PATH_TO_FOUR_CLASSES_DATA, names=['token', 'score', '
 # reading second dataset
 eight_classes = pd.read_csv(PATH_TO_EIGHT_CLASSES_DATA, names=['token', 'label', 'score'], sep=r"\s+")
 
-# get parts of speech
-
 
 # clean text
 def clean_text(text: str) -> str:
@@ -31,6 +28,14 @@ def clean_text(text: str) -> str:
     tokens = ' '.join(
         [re.sub('\n', '', token.text.lower()) for token in doc if not token.is_stop and not token.is_punct])
     return tokens
+
+
+# normalization of each result
+def scale_dict_result(dict_):
+    values = dict_.values()
+    min_ = min(values)
+    max_ = max(values)
+    return {key: ((v - min_) / (max_ - min_)) for (key, v) in dict_.items()}
 
 
 def eval_text(text: str, dataset: pd.DataFrame, multiply: bool) -> Tuple:
@@ -46,20 +51,23 @@ def eval_text(text: str, dataset: pd.DataFrame, multiply: bool) -> Tuple:
                 multiplier = POS_MULTIPLIER[pos]
             except KeyError:
                 continue
-
         sub_df = dataset.loc[dataset.token == token.text]
         if not sub_df.empty:
             for index, row in sub_df.iterrows():
                 tmp = [row['token'], float(row['score'])*multiplier]
                 if tmp not in emotional_class[row['label']]:
                     emotional_class[row['label']].append(tmp)
+    if 'positive' in emotional_class:
+        emotional_class.pop('positive')
+        emotional_class.pop('negative')
     # probabilities calc
     s = 0
     for k, _ in emotional_class.items():
-        result_dict[k] = sum(map(lambda x: x[1], emotional_class[k])) / len(emotional_class[k])
+        result_dict[k] = sum(map(lambda x: x[1], emotional_class[k]))
         s += result_dict[k]
-    for k, v in result_dict:
+    for k, v in result_dict.items():
         result_dict[k] = v / s
+        # result_dict[k] = v
     return emotional_class, result_dict
 
 
@@ -71,19 +79,27 @@ file.close()
 text = clean_text(text)
 result1 = eval_text(text, four_classes, multiply=False)[1]
 result2 = eval_text(text, eight_classes, multiply=True)[1]
-# removing 'positive' and 'negative' label
-result2.pop('positive')
-result2.pop('negative')
+
+# taking max values from each dataset, result2 is wider
+aggregated_result = result2.copy()
+for k, v in aggregated_result.items():
+    if k in result1:
+        aggregated_result[k] = max(result1[k], aggregated_result[k])
+
+# labeling via min between emotional classes
+labels = dict()
+labels['high_positive'] = max([min(aggregated_result['joy'], aggregated_result['surprise']),
+                               min(aggregated_result['joy'], aggregated_result['trust'])])
+labels['positive'] = max([min(aggregated_result['joy'], aggregated_result['anticipation'])])
+labels['neutral'] = max([min(aggregated_result['trust'], aggregated_result['anticipation']),
+                         min(aggregated_result['surprise'], aggregated_result['anticipation'])])
+labels['negative'] = [min(aggregated_result['sadness'], aggregated_result['fear']),
+                      min(aggregated_result['fear'], aggregated_result['anticipation'])]
+labels['high_negative'] = max([min(aggregated_result['anger'], aggregated_result['disgust']),
+                               min(aggregated_result['anger'], aggregated_result['fear']),
+                               min(aggregated_result['disgust'], aggregated_result['fear'])])
 
 
-# normalization of each result
-def scale_dict_result(dict_):
-    values = dict_.values()
-    min_ = min(values)
-    max_ = max(values)
-    return {key: ((v - min_) / (max_ - min_)) for (key, v) in dict_.items()}
 
 
-result1 = scale_dict_result(dict_=result1)
-result2 = scale_dict_result(dict_=result2)
 a = 1
